@@ -18,9 +18,11 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
+from textual.suggester import Suggester
 from textual.widgets import Button, Footer, Input, Label, RichLog, Static, TabbedContent, TabPane
 
 from . import __version__
+from .completion import Completer, GameCatalog
 from .process import ProcessControl, make_process
 from .profiles import Profile, ProfileError, config_dir, config_path, load_profiles, resolve, write_example
 from .rcon import Rcon, RconAuthError
@@ -32,7 +34,8 @@ MAX_LINES = 5000         # líneas retenidas por servidor
 HISTORY_MAX = 500
 
 HELP = """\
-[b]Atajos[/b]   Enter enviar · ↑/↓ historial · Ctrl-R buscar en historial · F2 filtrar log · Esc quitar filtro
+[b]Atajos[/b]   Enter enviar · Tab / Ctrl-Espacio autocompletar (repetir = rotar) · → aceptar sugerencia del historial
+          ↑/↓ historial · Ctrl-R buscar en historial · F2 filtrar log · Esc quitar filtro
           Ctrl-L limpiar · F5 reconectar RCON · F7/F8 pestaña anterior/siguiente · F1 ayuda · Ctrl-Q salir
 [b]Locales[/b]  :status  :start  :stop  :restart  :tail N  :clear  :reconnect  :help  :q
           Todo lo demás se envía al servidor por RCON (con o sin '/'). 'stop' pide confirmación.
@@ -83,6 +86,8 @@ class ServerSession:
         self.proc_pid: int | None = None
         self.history_file = config_dir() / f"history-{profile.name}"
         self._load_history()
+        self.catalog = GameCatalog(lambda cmd: self.ensure_rcon().command_retry(cmd))
+        self.completer: Completer | None = None  # se crea en la app (necesita los nombres de pestaña)
 
     # --- historial
     def _load_history(self) -> None:
@@ -113,6 +118,22 @@ class ServerSession:
     def push(self, line: str) -> None:
         with self.pending_lock:
             self.pending.append(line)
+
+
+class HistorySuggester(Suggester):
+    """Sugerencia fantasma (se acepta con →) a partir del historial de la sesión activa."""
+
+    def __init__(self, app: "ConsoleApp"):
+        super().__init__(use_cache=False, case_sensitive=True)
+        self.app_ref = app
+
+    async def get_suggestion(self, value: str) -> str | None:
+        if len(value) < 2:
+            return None
+        for cmd in reversed(self.app_ref.session.history):
+            if cmd.startswith(value) and cmd != value:
+                return cmd
+        return None
 
 
 class ServerPane(TabPane):
@@ -171,6 +192,7 @@ class ConsoleApp(App[int]):
         Binding("up", "history_prev", show=False, priority=True),
         Binding("down", "history_next", show=False, priority=True),
         Binding("ctrl+r", "history_search", show=False, priority=True),
+        Binding("tab,ctrl+at", "complete", "Completar", key_display="Tab", priority=True),
     ]
 
     def __init__(self, profiles: list[Profile], tail: int = 60):
@@ -183,11 +205,14 @@ class ConsoleApp(App[int]):
         with TabbedContent(id="tabs"):
             for s in self.sessions:
                 yield ServerPane(s)
-        yield Input(placeholder="comando RCON…  (:help para ayuda local)", id="prompt")
+        yield Input(placeholder="comando RCON…  (:help para ayuda local, Tab completa)", id="prompt", suggester=HistorySuggester(self))
         yield Footer()
 
     def on_mount(self) -> None:
         self.query_one("#prompt", Input).focus()
+        names = lambda: [x.profile.name for x in self.sessions]  # noqa: E731
+        for s in self.sessions:
+            s.completer = Completer(s.catalog, names)
         for s in self.sessions:
             self.start_follow(s)
             self.connect_rcon(s, verbose=True)
@@ -229,6 +254,13 @@ class ConsoleApp(App[int]):
             s.rcon_error = ""
             if verbose:
                 self.call_from_thread(self.say, s, f"[green]✓ RCON conectado a {s.profile.label}[/]")
+            if not s.catalog.ready:
+                try:
+                    s.catalog.load_root()
+                    n = len(s.catalog.nodes[()].literals)
+                    self.call_from_thread(self.say, s, f"[dim]catálogo de comandos: {n} raíces (Tab para completar)[/]")
+                except Exception as e:  # noqa: BLE001
+                    self.call_from_thread(self.say, s, f"[dim]sin catálogo de comandos ({e})[/]")
         except RconAuthError as e:
             s.rcon_error = str(e)
             self.call_from_thread(self.say, s, f"[red]✗ {e}[/]")
@@ -442,6 +474,52 @@ class ConsoleApp(App[int]):
                 prompt.cursor_position = len(prompt.value)
                 return
         self.notify("sin más coincidencias en el historial", severity="warning", timeout=2)
+
+    def action_complete(self) -> None:
+        prompt = self.query_one("#prompt", Input)
+        if not prompt.has_focus:
+            prompt.focus()
+            return
+        self._complete_worker(self.session, prompt.value)
+
+    @work(thread=True, exclusive=True, group="complete")
+    def _complete_worker(self, s: ServerSession, text: str) -> None:
+        if s.completer is None:
+            return
+        try:
+            result = s.completer.complete(text)
+        except Exception as e:  # noqa: BLE001
+            self.call_from_thread(self.say, s, f"[red]autocompletado: {e}[/]")
+            return
+        if result is None:
+            return
+        self.call_from_thread(self._apply_completion, s, text, result)
+
+    def _apply_completion(self, s: ServerSession, original: str, result) -> None:
+        prompt = self.query_one("#prompt", Input)
+        if prompt.value != original:  # el usuario siguió escribiendo mientras tanto
+            return
+        self._last_completion_value = result.text  # Input.Changed llega después: no debe resetear el ciclo
+        prompt.value = result.text
+        prompt.cursor_position = len(result.text)
+        import re as _re
+        cycling = bool(_re.match(r"^\d+/\d+", result.hint))
+        if cycling:
+            # una sola línea compacta por vuelta: "2/5 · a  b  [c]  d  e"
+            marked = [f"[{c}]" if i == s.completer._cycle_i else c for i, c in enumerate(result.candidates[:40])]  # type: ignore[union-attr]
+            self.say(s, Text(f"  {result.hint.split(' · ')[0]} · " + "  ".join(marked), style="dim"))
+            return
+        if result.candidates:
+            shown = result.candidates[:40]
+            extra = f"  … +{len(result.candidates) - 40}" if len(result.candidates) > 40 else ""
+            self.say(s, Text("  " + "  ".join(shown) + extra, style="dim"))
+        if result.hint:
+            self.say(s, Text("  " + result.hint, style="dim italic"))
+
+    @on(Input.Changed, "#prompt")
+    def on_prompt_changed(self, event: Input.Changed) -> None:
+        if event.value != getattr(self, "_last_completion_value", None) and self.session.completer:
+            self.session.completer.reset_cycle()
 
     def action_quit(self) -> None:
         self.exit(0)

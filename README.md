@@ -55,8 +55,10 @@ mc-rcon -p survival --json "list"
 mc-rcon -p survival :status | :start | :stop | :restart
 echo -e "say a\nsay b" | mc-rcon -p survival -
 ```
-Dentro de la TUI: `?` ayuda · `/` filtro · `↑↓` historial · `Ctrl-R` buscar · `Ctrl-L` limpiar · `F5` reconectar ·
-`:status :start :stop :restart :tail N :q`. Salir **no** para el servidor.
+Dentro de la TUI: `Tab` / `Ctrl-Espacio` **autocompleta** comandos locales (`:`), del juego y sus subcomandos
+(árbol pedido al servidor con `minecraft:help`, incluye mods y plugins; repetir = rotar candidatos) · `→` acepta la
+sugerencia del historial · `F1` ayuda · `F2` filtro · `↑↓` historial · `Ctrl-R` buscar · `Ctrl-L` limpiar ·
+`F5` reconectar · `F7/F8` pestañas · `:status :start :stop :restart :tail N :filter :tab :q`. Salir **no** para el servidor.
 
 ## Modo máquina y códigos de salida
 `mc-rcon` no usa colores ni cursor (a menos que `--color`); `0` ok · `2` contraseña rechazada · `3` sin conexión /

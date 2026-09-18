@@ -58,3 +58,26 @@ async def test_starts_with_server_down(tmp_path: Path):
         assert await wait_for(lambda: "RCON no disponible" in log_text(app))
         await pilot.press(*"list", "enter")
         assert await wait_for(lambda: "¿Está el servidor arriba?" in log_text(app))
+
+
+async def test_tab_completes_local_and_game(profile, fake_server):
+    fake_server.responses["minecraft:help"] = "/advancement (grant|revoke)\n/girls (locateAll|spawnCustom)\n/list\n/gamemode <mode> [<targets>]\n"
+    fake_server.responses["minecraft:help girls spawnCustom"] = "/girls spawnCustom <id> [<pos>]\n"
+    app = ConsoleApp([profile])
+    async with app.run_test(size=(100, 30)) as pilot:
+        assert await wait_for(lambda: "catálogo de comandos" in log_text(app))
+        prompt = app.query_one("#prompt")
+        await pilot.press(*":st", "tab")
+        assert await wait_for(lambda: prompt.value in (":start ", ":status ", ":st"))
+        # ':st' → start|status: ciclo
+        v1 = prompt.value
+        await pilot.press("tab")
+        assert await wait_for(lambda: prompt.value != v1 and prompt.value.startswith(":st"))
+        await pilot.press("escape")
+        prompt.value = ""
+        await pilot.press(*"gir", "tab")
+        assert await wait_for(lambda: prompt.value == "girls ")
+        await pilot.press(*"sp", "tab")
+        assert await wait_for(lambda: prompt.value == "girls spawnCustom ")
+        await pilot.press("tab")  # sin literales: pista de argumentos
+        assert await wait_for(lambda: "<id>" in log_text(app))
