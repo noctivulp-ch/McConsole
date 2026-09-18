@@ -11,7 +11,7 @@ diferida de plugins, que RCON nunca devuelve).
 
 ## Instalación
 ```bash
-uv tool install --editable /ruta/a/mc-console     # o: pipx install /ruta/a/mc-console
+uv tool install --editable .        # desde AppCreator/McConsole (o pipx install .)
 mc-console --init                                  # escribe ~/.config/mc-console/servers.toml de ejemplo
 ```
 
