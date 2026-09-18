@@ -36,6 +36,7 @@ HISTORY_MAX = 500
 HELP = """\
 [b]Atajos[/b]   Enter enviar · Tab / Ctrl-Espacio autocompletar (repetir = rotar) · → aceptar sugerencia del historial
           ↑/↓ historial · Ctrl-R buscar en historial · F2 filtrar log · Esc quitar filtro
+          PgUp/PgDn · Ctrl-Home/Ctrl-End mover el log (si subes, deja de seguir; vuelve a seguir al llegar abajo)
           Ctrl-L limpiar · F5 reconectar RCON · F7/F8 pestaña anterior/siguiente · F1 ayuda · Ctrl-Q salir
 [b]Locales[/b]  :status  :start  :stop  :restart  :tail N  :clear  :reconnect  :help  :q
           Todo lo demás se envía al servidor por RCON (con o sin '/'). 'stop' pide confirmación.
@@ -84,6 +85,7 @@ class ServerSession:
         self.history: list[str] = []
         self.history_idx = -1
         self.proc_pid: int | None = None
+        self.unseen = 0                      # líneas nuevas mientras el usuario lee arriba
         self.history_file = config_dir() / f"history-{profile.name}"
         self._load_history()
         self.catalog = GameCatalog(lambda cmd: self.ensure_rcon().command_retry(cmd))
@@ -136,6 +138,35 @@ class HistorySuggester(Suggester):
         return None
 
 
+class StickyLog(RichLog):
+    """RichLog que sigue el final solo mientras el usuario no haya subido a leer.
+
+    `following` cambia únicamente con el scroll: si baja de posición (el usuario subió) se suelta; cuando
+    vuelve a estar al final (PgDn, rueda, Ctrl-End) se reengancha. No se deriva por escritura porque el scroll
+    se aplica en el siguiente layout y durante una ráfaga de líneas la vista parece no estar al final.
+    """
+
+    following = True
+    on_follow_change = None  # callback(bool)
+
+    def watch_scroll_y(self, old_value: float, new_value: float) -> None:
+        super().watch_scroll_y(old_value, new_value)
+        if new_value < old_value:
+            self._set_following(False)
+        elif not self.following:
+            self.call_after_refresh(self._recheck)
+
+    def _recheck(self) -> None:
+        if self.is_vertical_scroll_end:
+            self._set_following(True)
+
+    def _set_following(self, value: bool) -> None:
+        if value != self.following:
+            self.following = value
+            if self.on_follow_change:
+                self.on_follow_change(value)
+
+
 class ServerPane(TabPane):
     """Una pestaña = un servidor: log arriba, línea de estado abajo. El prompt es común a la app."""
 
@@ -144,12 +175,27 @@ class ServerPane(TabPane):
         self.session = session
 
     def compose(self) -> ComposeResult:
-        yield RichLog(id="log", highlight=False, markup=False, wrap=True, max_lines=MAX_LINES, auto_scroll=True)
+        log = StickyLog(id="log", highlight=False, markup=False, wrap=True, max_lines=MAX_LINES, auto_scroll=False)
+        log.on_follow_change = self._on_follow_change
+        yield log
         yield Static(id="status", classes="status")
 
     @property
-    def log(self) -> RichLog:
-        return self.query_one("#log", RichLog)
+    def log(self) -> StickyLog:
+        return self.query_one("#log", StickyLog)
+
+    def append(self, text: Text) -> None:
+        """Escribe respetando la lectura del usuario (sticky bottom): sigue al final solo si `following`;
+        si está leyendo arriba, no lo mueve y cuenta las líneas nuevas hasta que vuelva abajo."""
+        log = self.log
+        log.write(text, scroll_end=log.following)
+        if not log.following:
+            self.session.unseen += 1
+
+    def _on_follow_change(self, following: bool) -> None:
+        if following:
+            self.session.unseen = 0
+        self.refresh_status()
 
     def refresh_status(self) -> None:
         s = self.session
@@ -163,6 +209,8 @@ class ServerPane(TabPane):
         parts.append(f"log: {s.source.label if s.source else '—'}")
         if s.filter:
             parts.append(f"[yellow]filtro: {s.filter}[/]")
+        if s.unseen:
+            parts.append(f"[yellow]▼ {s.unseen} nuevas (Ctrl-End)[/]")
         self.query_one("#status", Static).update(" · ".join(parts))
 
     def rerender(self) -> None:
@@ -172,7 +220,10 @@ class ServerPane(TabPane):
         f = self.session.filter.lower()
         for line in self.session.lines:
             if not f or f in strip_ansi(line).lower():
-                log.write(log_line_text(line))
+                log.write(log_line_text(line), scroll_end=False)
+        log.scroll_end(animate=False)
+        log._set_following(True)
+        self.session.unseen = 0
 
 
 class ConsoleApp(App[int]):
@@ -193,6 +244,10 @@ class ConsoleApp(App[int]):
         Binding("down", "history_next", show=False, priority=True),
         Binding("ctrl+r", "history_search", show=False, priority=True),
         Binding("tab,ctrl+at", "complete", "Completar", key_display="Tab", priority=True),
+        Binding("pageup", "log_page(-1)", "Log ▲", show=False, priority=True),
+        Binding("pagedown", "log_page(1)", "Log ▼", show=False, priority=True),
+        Binding("ctrl+home", "log_home", show=False, priority=True),
+        Binding("ctrl+end", "log_end", "Al final", show=False, priority=True),
     ]
 
     def __init__(self, profiles: list[Profile], tail: int = 60):
@@ -237,7 +292,7 @@ class ConsoleApp(App[int]):
 
     def say(self, s: ServerSession, text: Text | str) -> None:
         """Mensaje de la propia consola (no del log) en el panel de un servidor."""
-        self.pane_of(s).log.write(text if isinstance(text, Text) else Text.from_markup(text))
+        self.pane_of(s).append(text if isinstance(text, Text) else Text.from_markup(text))
 
     # --- workers (hilos): solo encolan; la UI se toca desde el bucle principal
     @work(thread=True, exclusive=False)
@@ -342,10 +397,13 @@ class ConsoleApp(App[int]):
                 s.pending.clear()
             pane = self.pane_of(s)
             f = s.filter.lower()
+            before = s.unseen
             for line in batch:
                 s.lines.append(line)
                 if not f or f in strip_ansi(line).lower():
-                    pane.log.write(log_line_text(line))
+                    pane.append(log_line_text(line))
+            if s.unseen != before:
+                pane.refresh_status()
 
     # --- entrada
     @on(Input.Submitted, "#prompt")
@@ -398,7 +456,7 @@ class ConsoleApp(App[int]):
                 n = int(rest or 40) if (rest or "40").isdigit() else 40
                 if s.source:
                     for line in s.source.tail(n):
-                        self.pane.log.write(log_line_text(line))
+                        self.pane.append(log_line_text(line))
             case "filter":
                 s.filter = rest.strip()
                 self.pane.rerender(); self.pane.refresh_status()
@@ -520,6 +578,18 @@ class ConsoleApp(App[int]):
     def on_prompt_changed(self, event: Input.Changed) -> None:
         if event.value != getattr(self, "_last_completion_value", None) and self.session.completer:
             self.session.completer.reset_cycle()
+
+    def action_log_page(self, direction: int) -> None:
+        log = self.pane.log
+        (log.scroll_page_down if direction > 0 else log.scroll_page_up)(animate=False)
+
+    def action_log_home(self) -> None:
+        self.pane.log.scroll_home(animate=False)
+
+    def action_log_end(self) -> None:
+        log = self.pane.log
+        log.scroll_end(animate=False)
+        log._set_following(True)
 
     def action_quit(self) -> None:
         self.exit(0)

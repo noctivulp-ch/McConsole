@@ -81,3 +81,34 @@ async def test_tab_completes_local_and_game(profile, fake_server):
         assert await wait_for(lambda: prompt.value == "girls spawnCustom ")
         await pilot.press("tab")  # sin literales: pista de argumentos
         assert await wait_for(lambda: "<id>" in log_text(app))
+
+
+async def test_sticky_bottom(profile, fake_server):
+    """Si el usuario sube, las líneas nuevas no lo bajan y se cuentan; al volver abajo se reengancha."""
+    from pathlib import Path
+    log_path = Path(profile.log.path)
+    log_path.write_text("".join(f"[00:00:{i:02d} INFO]: linea {i}\n" for i in range(200)))
+    app = ConsoleApp([profile], tail=200)
+    async with app.run_test(size=(80, 20)) as pilot:
+        assert await wait_for(lambda: "linea 199" in log_text(app))
+        pane = app.query_one(ServerPane)
+        await pilot.pause()
+        assert pane.log.is_vertical_scroll_end
+        await pilot.press("pageup", "pageup")
+        await pilot.pause()
+        assert not pane.log.is_vertical_scroll_end
+        y_before = pane.log.scroll_y
+        with log_path.open("a") as f:
+            f.write("[00:01:00 INFO]: nueva A\n[00:01:01 INFO]: nueva B\n")
+        assert await wait_for(lambda: pane.session.unseen == 2, timeout=4)
+        await pilot.pause()
+        assert pane.log.scroll_y == y_before          # no me movió
+        assert "2 nuevas" in str(pane.query_one("#status").render())
+        await pilot.press("ctrl+end")
+        assert await wait_for(lambda: pane.session.unseen == 0)
+        assert pane.log.is_vertical_scroll_end
+        with log_path.open("a") as f:
+            f.write("[00:01:02 INFO]: nueva C\n")
+        assert await wait_for(lambda: "nueva C" in log_text(app), timeout=4)
+        await pilot.pause(); await pilot.pause()
+        assert pane.log.following and pane.log.is_vertical_scroll_end   # reenganchado: sigue bajando
