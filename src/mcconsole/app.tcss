@@ -1,0 +1,14 @@
+/* Densidad de terminal: un panel grande (log), una línea de estado, un prompt. Colores por rol sobre la paleta del usuario. */
+Screen { layout: vertical; }
+TabbedContent { height: 1fr; }
+TabPane { padding: 0; }
+#log { height: 1fr; border: none; padding: 0 1; scrollbar-size-vertical: 1; }
+.status { height: 1; padding: 0 1; background: $panel; color: $text-muted; }
+#prompt { border: none; height: 1; padding: 0 1; background: $surface; }
+#prompt:focus { border: none; background: $surface; }
+Footer { height: 1; }
+/* diálogo de confirmación */
+Confirm { align: center middle; }
+#confirm { width: 50; height: auto; padding: 1 2; border: round $error; background: $panel; }
+#confirm Horizontal { height: auto; align-horizontal: right; margin-top: 1; }
+#confirm Button { margin-left: 1; min-width: 10; }

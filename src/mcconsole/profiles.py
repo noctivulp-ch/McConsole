@@ -1,0 +1,142 @@
+"""Perfiles de servidor: ~/.config/mc-console/servers.toml (XDG). Secretos por referencia a fichero, nunca inline.
+
+Formato:
+
+    [servers.survival]
+    host = "127.0.0.1"          # host RCON (local o remoto)
+    rcon_port = 25575
+    password_file = "~/.config/mc-console/survival.pw"   # o password_env = "MC_RCON_PW"
+    [servers.survival.log]
+    type = "local"              # "local" | "ssh"
+    path = "/ruta/console.log"
+    # ssh_host = "user@vps"     # solo type = "ssh" (tail -F remoto)
+    [servers.survival.process]      # opcional: control del proceso (:start/:stop)
+    type = "local"              # "local" | "ssh"
+    start = "/ruta/start.sh"    # script desacoplado que escribe el pidfile
+    pidfile = "/ruta/server.pid"
+    # ssh_host = "user@vps"
+"""
+from __future__ import annotations
+
+import os
+import tomllib
+from dataclasses import dataclass, field
+from pathlib import Path
+
+
+def config_dir() -> Path:
+    base = os.environ.get("XDG_CONFIG_HOME") or os.path.join(Path.home(), ".config")
+    return Path(base) / "mc-console"
+
+
+def config_path() -> Path:
+    return config_dir() / "servers.toml"
+
+
+@dataclass
+class LogSpec:
+    type: str = "local"           # local | ssh
+    path: str = ""
+    ssh_host: str = ""
+
+
+@dataclass
+class ProcessSpec:
+    type: str = "local"           # local | ssh
+    start: str = ""
+    pidfile: str = ""
+    ssh_host: str = ""
+
+
+@dataclass
+class Profile:
+    name: str
+    host: str = "127.0.0.1"
+    rcon_port: int = 25575
+    password_file: str = ""
+    password_env: str = ""
+    log: LogSpec = field(default_factory=LogSpec)
+    process: ProcessSpec | None = None
+
+    def password(self) -> str:
+        if self.password_env and os.environ.get(self.password_env):
+            return os.environ[self.password_env]
+        if self.password_file:
+            return Path(self.password_file).expanduser().read_text().strip()
+        raise ValueError(f"perfil '{self.name}': falta password_file o password_env")
+
+    @property
+    def label(self) -> str:
+        return f"{self.host}:{self.rcon_port}"
+
+
+class ProfileError(Exception):
+    pass
+
+
+def _expand(s: str) -> str:
+    return os.path.expandvars(os.path.expanduser(s)) if s else s
+
+
+def load_profiles(path: Path | None = None) -> dict[str, Profile]:
+    path = path or config_path()
+    if not path.exists():
+        return {}
+    data = tomllib.loads(path.read_text(encoding="utf-8"))
+    out: dict[str, Profile] = {}
+    for name, d in (data.get("servers") or {}).items():
+        log = d.get("log") or {}
+        proc = d.get("process")
+        out[name] = Profile(
+            name=name,
+            host=d.get("host", "127.0.0.1"),
+            rcon_port=int(d.get("rcon_port", 25575)),
+            password_file=_expand(d.get("password_file", "")),
+            password_env=d.get("password_env", ""),
+            log=LogSpec(type=log.get("type", "local"), path=_expand(log.get("path", "")), ssh_host=log.get("ssh_host", "")),
+            process=None if not proc else ProcessSpec(
+                type=proc.get("type", "local"), start=_expand(proc.get("start", "")),
+                pidfile=_expand(proc.get("pidfile", "")), ssh_host=proc.get("ssh_host", "")),
+        )
+    return out
+
+
+def profile_from_env(name: str = "server") -> Profile | None:
+    """Compatibilidad con los wrappers antiguos (RCON_HOST/RCON_PORT/RCON_PW_FILE/RCON_LOG/SERVER_START/SERVER_PID)."""
+    pw = os.environ.get("RCON_PW_FILE")
+    if not pw:
+        return None
+    proc = None
+    if os.environ.get("SERVER_START") or os.environ.get("SERVER_PID"):
+        proc = ProcessSpec(type="local", start=_expand(os.environ.get("SERVER_START", "")), pidfile=_expand(os.environ.get("SERVER_PID", "")))
+    return Profile(
+        name=os.environ.get("RCON_NAME", name),
+        host=os.environ.get("RCON_HOST", "127.0.0.1"),
+        rcon_port=int(os.environ.get("RCON_PORT", "25575")),
+        password_file=_expand(pw),
+        log=LogSpec(type="local", path=_expand(os.environ.get("RCON_LOG", ""))),
+        process=proc,
+    )
+
+
+def resolve(name: str | None) -> Profile:
+    """Perfil por nombre; si no hay nombre: variables de entorno; si solo hay un perfil, ese."""
+    profiles = load_profiles()
+    if name:
+        if name in profiles:
+            return profiles[name]
+        raise ProfileError(f"perfil '{name}' no existe en {config_path()} (disponibles: {', '.join(profiles) or 'ninguno'})")
+    env = profile_from_env()
+    if env:
+        return env
+    if len(profiles) == 1:
+        return next(iter(profiles.values()))
+    raise ProfileError(f"indica un perfil ({', '.join(profiles) or 'ninguno definido'}) — ver `mc-console --help` y {config_path()}")
+
+
+def write_example(path: Path | None = None) -> Path:
+    path = path or config_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if not path.exists():
+        path.write_text(__doc__.split("Formato:", 1)[1].replace("\n    ", "\n").strip() + "\n", encoding="utf-8")
+    return path
