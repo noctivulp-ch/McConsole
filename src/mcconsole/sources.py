@@ -1,6 +1,9 @@
 """Fuentes de log: fichero local (tail -F tolerante a truncado/rotación) o remoto por SSH (`tail -F` en el host).
 
 Interfaz común: `LogSource.follow(emit, stop, last_lines)` corre en un hilo y llama a `emit(line)` por línea.
+`last_lines=None` = todo el archivo actual (con logs rotados por arranque, eso es "el arranque completo").
+Si el archivo cambia de inode (rotación por reinicio: `console.log` es un symlink al del arranque actual), se
+reabre y se avisa; si se trunca, también.
 """
 from __future__ import annotations
 
@@ -33,27 +36,32 @@ class LocalFileSource:
         except OSError:
             return []
 
-    def follow(self, emit: Emit, stop: threading.Event, last_lines: int) -> None:
+    def follow(self, emit: Emit, stop: threading.Event, last_lines: int | None) -> None:
         pos, inode, f, printed = 0, None, None, False
         while not stop.is_set():
             try:
-                st = self.path.stat()
+                st = self.path.stat()  # sigue el symlink: al rotar cambia el inode
             except FileNotFoundError:
                 if f:
                     f.close(); f = None
                 stop.wait(0.5)
                 continue
-            if f is None or st.st_ino != inode or st.st_size < pos:
+            rotated = f is not None and st.st_ino != inode
+            truncated = f is not None and not rotated and st.st_size < pos
+            if f is None or rotated or truncated:
                 if f:
                     f.close()
                 f = self.path.open("r", encoding="utf-8", errors="replace")
                 inode = st.st_ino
                 if not printed:
-                    for line in f.readlines()[-last_lines:]:
+                    lines = f.readlines()
+                    for line in (lines if last_lines is None else lines[-last_lines:]):
                         emit(line.rstrip("\n"))
                     printed = True
-                elif st.st_size < pos:
-                    emit("\x1b[90m— log truncado (¿servidor reiniciado?) —\x1b[0m")
+                elif rotated:
+                    emit(f"\x1b[96m— nuevo archivo de log ({self.path.resolve().name}): arranque nuevo —\x1b[0m")
+                elif truncated:
+                    emit("\x1b[90m— log truncado —\x1b[0m")
                 pos = f.tell()
             line = f.readline()
             if line:
@@ -86,11 +94,12 @@ class SshTailSource:
         except (OSError, subprocess.TimeoutExpired):
             return []
 
-    def follow(self, emit: Emit, stop: threading.Event, last_lines: int) -> None:
+    def follow(self, emit: Emit, stop: threading.Event, last_lines: int | None) -> None:
         backoff = 1.0
+        n = 20000 if last_lines is None else last_lines  # remoto: tope razonable en vez de "todo"
         while not stop.is_set():
             try:
-                proc = subprocess.Popen(self._ssh("tail", "-n", str(last_lines), "-F", self.path),
+                proc = subprocess.Popen(self._ssh("tail", "-n", str(n), "-F", self.path),
                                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
             except OSError as e:
                 emit(f"\x1b[91mssh: {e}\x1b[0m")
@@ -107,7 +116,7 @@ class SshTailSource:
                 break
             emit(f"\x1b[93m— conexión ssh a {self.ssh_host} perdida; reintento en {backoff:.0f}s —\x1b[0m")
             stop.wait(backoff); backoff = min(backoff * 2, 30)
-            last_lines = 0  # al reconectar no repetir el histórico
+            n = 0  # al reconectar no repetir el histórico
 
 
 def make_source(spec: LogSpec) -> LogSource | None:

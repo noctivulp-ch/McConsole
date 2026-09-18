@@ -65,11 +65,17 @@ sugerencia del historial · `F1` ayuda · `F2` filtro · `↑↓` historial · `
 `mc-rcon` no usa colores ni cursor (a menos que `--color`); `0` ok · `2` contraseña rechazada · `3` sin conexión /
 proceso · `4` uso. `mc-console` sin TTY sale con 4 y te manda a `mc-rcon`.
 
-## Script de arranque esperado
+## Script de arranque esperado (log por arranque + pidfile)
 ```bash
-java ... -jar server.jar nogui <&3 >> console.log 2>&1 &
-echo $! > server.pid; wait $!; rm -f server.pid
+mkdir -p console-logs
+find console-logs -name 'console-*.log' -mtime +60 -delete                       # retención por días
+ls -1t console-logs/console-*.log | tail -n +30 | xargs -r rm -f --              # retención por número
+LOG="console-logs/console-$(date +%F_%H-%M-%S).log"; : > "$LOG"; ln -sfn "$LOG" console.log
+java ... -jar server.jar nogui <&3 >> "$LOG" 2>&1 &
+echo $! > server.pid; wait $!; echo "SERVER_EXIT=$?" >> "$LOG"; rm -f server.pid
 ```
+`mc-console` sigue `console.log` (el symlink): al abrir carga el archivo actual entero — es decir, **el arranque
+completo** — y cuando el servidor reinicia detecta el archivo nuevo y reengancha. `--tail N` limita la carga inicial.
 
 ## Por qué Textual
 Ver `docs/decisiones/0001-stack.md`. Resumen: Python ya estaba en el flujo; hacen falta paneles, pestañas, filtro,

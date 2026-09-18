@@ -30,7 +30,7 @@ from .sources import LogSource, make_source
 from .text import log_line_text, response_text, strip_ansi
 
 REFRESH_HZ = 12          # tope de refresco del log (SSH/tmux lo agradecen)
-MAX_LINES = 5000         # líneas retenidas por servidor
+MAX_LINES = 20000        # líneas retenidas por servidor (un arranque entero cabe de sobra)
 HISTORY_MAX = 500
 
 HELP = """\
@@ -250,7 +250,7 @@ class ConsoleApp(App[int]):
         Binding("ctrl+end", "log_end", "Al final", show=False, priority=True),
     ]
 
-    def __init__(self, profiles: list[Profile], tail: int = 60):
+    def __init__(self, profiles: list[Profile], tail: int | None = None):
         super().__init__()
         self.sessions = [ServerSession(p) for p in profiles]
         self.tail = tail
@@ -601,7 +601,7 @@ class ConsoleApp(App[int]):
                 s.rcon.close()
 
 
-def run_app(*profiles: Profile, tail: int = 60) -> int:
+def run_app(*profiles: Profile, tail: int | None = None) -> int:
     if not sys.stdout.isatty():
         print("mc-console necesita una terminal; para scripts usa mc-rcon", file=sys.stderr)
         return 4
@@ -612,7 +612,7 @@ def run_app(*profiles: Profile, tail: int = 60) -> int:
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="mc-console", description="Consola TUI para servidores Minecraft (log + RCON + proceso). Modo máquina: mc-rcon.")
     ap.add_argument("profiles", nargs="*", help="perfil(es) de ~/.config/mc-console/servers.toml; varios → pestañas")
-    ap.add_argument("--tail", type=int, default=60, help="líneas iniciales del log")
+    ap.add_argument("--tail", type=int, default=None, metavar="N", help="cargar solo las últimas N líneas (por defecto: el archivo actual entero = el arranque)")
     ap.add_argument("--init", action="store_true", help="escribir un servers.toml de ejemplo y salir")
     ap.add_argument("--profiles", dest="list_profiles", action="store_true", help="listar perfiles y salir")
     ap.add_argument("--version", action="version", version=f"mc-console {__version__}")

@@ -112,3 +112,21 @@ async def test_sticky_bottom(profile, fake_server):
         assert await wait_for(lambda: "nueva C" in log_text(app), timeout=4)
         await pilot.pause(); await pilot.pause()
         assert pane.log.following and pane.log.is_vertical_scroll_end   # reenganchado: sigue bajando
+
+
+async def test_loads_whole_file_and_follows_rotation(profile, fake_server, tmp_path):
+    """Por defecto se carga el archivo entero; si console.log (symlink) pasa a apuntar a otro archivo, se reengancha."""
+    import os
+    from pathlib import Path
+    real1 = tmp_path / "console-1.log"; real1.write_text("".join(f"[00:00:{i:02d} INFO]: boot1 {i}\n" for i in range(150)))
+    link = tmp_path / "console.log"
+    if link.exists():
+        link.unlink()
+    os.symlink(real1.name, link)
+    profile.log.path = str(link)
+    app = ConsoleApp([profile])
+    async with app.run_test(size=(80, 20)) as pilot:
+        assert await wait_for(lambda: "boot1 0" in log_text(app) and "boot1 149" in log_text(app))
+        real2 = tmp_path / "console-2.log"; real2.write_text("[00:01:00 INFO]: boot2 start\n")
+        tmp_link = tmp_path / "console.log.tmp"; os.symlink(real2.name, tmp_link); os.replace(tmp_link, link)
+        assert await wait_for(lambda: "arranque nuevo" in log_text(app) and "boot2 start" in log_text(app), timeout=5)
