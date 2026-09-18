@@ -592,6 +592,8 @@ class ConsoleApp(App[int]):
                     self.close_session(s)
                 else:
                     self.say(s, ":profile new | list | close")
+            case "world":
+                self.world_command(s, rest.strip())
             case "tab":
                 tabs = self.query_one("#tabs", TabbedContent)
                 if rest.strip() and self.query(f"#pane-{rest.strip()}"):
@@ -600,6 +602,29 @@ class ConsoleApp(App[int]):
                     self.say(s, f"pestañas: {', '.join(x.profile.name for x in self.sessions)}")
             case _:
                 self.say(s, f"[red]comando local desconocido: :{op}[/]  (:help)")
+
+    def world_command(self, s: ServerSession, text: str) -> None:
+        from .worldcmd import needs_confirm, run as world_run
+        msg = needs_confirm(text)
+        if msg:
+            self.push_screen(Confirm(msg), lambda ok: ok and self._world_run(s, text))
+            return
+        self._world_run(s, text)
+
+    def _world_run(self, s: ServerSession, text: str) -> None:
+        from .worldcmd import run as world_run
+        self.poll_process(s)
+        running = bool(s.process and s.process.pid())
+
+        def _start() -> list[str]:
+            self.process_action(s, "start")
+            return ["arranque lanzado (mira el log)"]
+
+        rc, lines = world_run(text, s.profile, running,
+                              rcon_factory=lambda: Rcon(s.profile.host, s.profile.rcon_port, s.profile.password()),
+                              start=_start)
+        for l in lines:
+            self.say(s, ("[red]" + l + "[/]") if rc and l.startswith("error") else l.replace("[", "\\["))
 
     # --- acciones
     def _profile_created(self, prof: Profile | None) -> None:

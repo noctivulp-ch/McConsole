@@ -14,6 +14,7 @@ Formato:
     type = "local"              # "local" | "ssh"
     start = "/ruta/start.sh"    # script desacoplado que escribe el pidfile
     pidfile = "/ruta/server.pid"
+    # server_dir = "/ruta"       # carpeta con server.properties y los mundos (:world); por defecto la del start
     # ssh_host = "user@vps"
 """
 from __future__ import annotations
@@ -46,6 +47,15 @@ class ProcessSpec:
     start: str = ""
     pidfile: str = ""
     ssh_host: str = ""
+    server_dir: str = ""          # carpeta del servidor (server.properties, mundos); por defecto la del script start
+
+    def server_path(self):
+        from pathlib import Path as _P
+        if self.server_dir:
+            return _P(self.server_dir).expanduser()
+        if self.start:
+            return _P(self.start).expanduser().resolve().parent
+        return None
 
 
 @dataclass
@@ -96,7 +106,8 @@ def load_profiles(path: Path | None = None) -> dict[str, Profile]:
             log=LogSpec(type=log.get("type", "local"), path=_expand(log.get("path", "")), ssh_host=log.get("ssh_host", "")),
             process=None if not proc else ProcessSpec(
                 type=proc.get("type", "local"), start=_expand(proc.get("start", "")),
-                pidfile=_expand(proc.get("pidfile", "")), ssh_host=proc.get("ssh_host", "")),
+                pidfile=_expand(proc.get("pidfile", "")), ssh_host=proc.get("ssh_host", ""),
+                server_dir=_expand(proc.get("server_dir", ""))),
         )
     return out
 

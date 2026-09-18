@@ -5,6 +5,7 @@
   mc-rcon [-p PERFIL] --log-wait 2 "cmd"      + líneas NUEVAS del log durante 2 s (salida diferida de plugins)
   mc-rcon [-p PERFIL] --json "cmd"            {"cmd","response","log"} por línea
   mc-rcon [-p PERFIL] :status|:start|:stop|:restart
+  mc-rcon [-p PERFIL] :world list|info|types|create|use|rename|delete|backup …   mundos (":world help")
   mc-rcon [-p PERFIL] -t                      abre la TUI (mc-console)
   mc-rcon --profiles                          lista perfiles
 
@@ -132,6 +133,23 @@ def main(argv: list[str] | None = None) -> int:
         others = [p for p in load_profiles().values() if p.name != prof.name]
         return run_app(prof, *others, active=prof.name)
 
+    if args.commands and args.commands[0] == ":world":
+        from .worldcmd import run as world_run
+        proc = make_process(prof.process)
+        running = bool(proc and proc.pid())
+
+        def _start() -> list[str]:
+            import contextlib, io
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
+                process_command(":start", prof, args.timeout)
+            return buf.getvalue().splitlines()
+
+        rc, lines = world_run(" ".join(args.commands[1:]), prof, running,
+                              rcon_factory=lambda: Rcon(prof.host, prof.rcon_port, prof.password(), timeout=args.timeout),
+                              start=_start)
+        print("\n".join(lines))
+        return rc
     if args.commands and args.commands[0].startswith(":"):
         return process_command(args.commands[0], prof, args.timeout)
 

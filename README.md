@@ -4,7 +4,7 @@ Consola para servidores Minecraft que corren desacoplados de la terminal (local 
 RCON + control del proceso**. Dos frontends sobre el mismo núcleo:
 
 - `mc-console` — TUI (Textual) para humanos: log arriba, prompt abajo, estado, pestañas por servidor, filtro, historial.
-- `mc-rcon` — CLI para scripts y agentes: salida limpia, varios comandos por conexión, `--json`, `--log-wait`, `:start/:stop/:status`.
+- `mc-rcon` — CLI para scripts y agentes: salida limpia, varios comandos por conexión, `--json`, `--log-wait`, `:start/:stop/:status`, `:world …` (mundos).
 
 Humano y bot conviven: RCON admite varios clientes y el log es la fuente de verdad para ambos (incluida la salida
 diferida de plugins, que RCON nunca devuelve).
@@ -64,13 +64,26 @@ mc-rcon -p survival "list" "tps"  # bot: una conexión, cabecera '# cmd' por res
 mc-rcon -p survival --log-wait 2 "lp user X info"
 mc-rcon -p survival --json "list"
 mc-rcon -p survival :status | :start | :stop | :restart
+mc-rcon -p survival :world list | info W | types | create W --type minecraft:flat --seed 3 | use W | rename A B | delete W | backup W
 echo -e "say a\nsay b" | mc-rcon -p survival -
 ```
+
+### Mundos (`:world`, CLI y TUI)
+Trabaja sobre la carpeta del servidor (perfil `[process]` local: la del `start` o `server_dir = "…"`): lista las
+carpetas con `level.dat` (activo = `level-name`; tamaño, versión, semilla, generador real leído de `level.dat` /
+`world_gen_settings.dat`, horas jugadas), `info`, `types` (**presets descubiertos dinámicamente**: `data/*/worldgen/
+world_preset/*.json` del jar del servidor —incluido el jar anidado del bundler—, `mods/*.jar`, `plugins/*.jar`,
+datapacks de los mundos, y packs de Terra en `plugins/Terra/packs` como `terra:ID`), `create` (escribe
+`server.properties`: `level-name/level-type/level-seed/generator-settings/generate-structures/hardcore/difficulty/
+gamemode` + `--set clave=valor` para cualquier otra; con `terra:*` añade `worlds.<mundo>.generator: Terra:ID` a
+`bukkit.yml`; el mundo se genera al arrancar, `--start` lo arranca), `use` (cambia `level-name`), `rename`, `delete`
+(mueve a `worlds-trash/`, `--purge` borra; nunca el activo) y `backup` (zip en `backups/`; si el servidor corre,
+`save-all` por RCON antes). Crear/usar/renombrar exigen servidor parado; la TUI pide confirmación.
 Dentro de la TUI: `Tab` / `Ctrl-Espacio` **autocompleta** comandos locales (`:`), del juego y sus subcomandos
 (árbol pedido al servidor con `minecraft:help`, incluye mods y plugins; repetir = rotar candidatos) · `→` acepta la
 sugerencia del historial · `F1` ayuda · `F2` filtro · `↑↓` historial · `Ctrl-R` buscar · `Ctrl-L` limpiar ·
 `F5` reconectar · `F7/F8` pestañas · `PgUp/PgDn`, `Ctrl-Home/End` mover el log (si subes a leer, las líneas nuevas
-**no** te bajan: el estado muestra `▼ N nuevas`; al volver abajo se reengancha solo) · `:status :start :stop :restart :tail N :filter :tab :q`. Salir **no** para el servidor.
+**no** te bajan: el estado muestra `▼ N nuevas`; al volver abajo se reengancha solo) · `:status :start :stop :restart :world … :tail N :filter :tab :q`. Salir **no** para el servidor.
 
 ## Modo máquina y códigos de salida
 `mc-rcon` no usa colores ni cursor (a menos que `--color`); `0` ok · `2` contraseña rechazada · `3` sin conexión /

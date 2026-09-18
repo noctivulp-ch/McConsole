@@ -19,6 +19,7 @@ LOCAL_COMMANDS: dict[str, str] = {
     "restart": "reiniciar servidor", "tail": "N — reimprimir últimas N líneas", "clear": "limpiar panel",
     "reconnect": "reconectar RCON", "filter": "TEXTO — filtrar log (vacío quita)", "tab": "NOMBRE — cambiar pestaña",
     "profile": "new | list | close — perfiles (pestañas)",
+    "world": "list | info | types | create | use | rename | delete | backup — mundos del servidor",
     "q": "salir (no para el servidor)",
 }
 
