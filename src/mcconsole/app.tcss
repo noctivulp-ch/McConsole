@@ -12,3 +12,10 @@ Confirm { align: center middle; }
 #confirm { width: 50; height: auto; padding: 1 2; border: round $error; background: $panel; }
 #confirm Horizontal { height: auto; align-horizontal: right; margin-top: 1; }
 #confirm Button { margin-left: 1; min-width: 10; }
+
+ProfileForm { align: center middle; }
+#profile-form { width: 70; height: auto; max-height: 90%; padding: 1 2; border: round $accent; background: $panel; overflow-y: auto; }
+#profile-form .field-label { color: $text-muted; margin-top: 1; }
+#profile-form Input { height: 1; border: none; background: $surface; padding: 0 1; }
+#profile-form Horizontal { height: auto; align-horizontal: right; margin-top: 1; }
+#profile-form Button { margin-left: 1; min-width: 10; }

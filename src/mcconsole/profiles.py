@@ -134,6 +134,42 @@ def resolve(name: str | None) -> Profile:
     raise ProfileError(f"indica un perfil ({', '.join(profiles) or 'ninguno definido'}) — ver `mc-console --help` y {config_path()}")
 
 
+def _toml_str(v: str) -> str:
+    return '"' + v.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def append_profile(p: Profile, path: Path | None = None) -> Path:
+    """Añade un perfil al servers.toml (escritura simple: la estructura es plana y conocida)."""
+    path = path or config_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if p.name in load_profiles(path):
+        raise ProfileError(f"ya existe un perfil '{p.name}'")
+    out = [f"\n[servers.{p.name}]", f"host = {_toml_str(p.host)}", f"rcon_port = {p.rcon_port}"]
+    if p.password_file:
+        out.append(f"password_file = {_toml_str(p.password_file)}")
+    if p.password_env:
+        out.append(f"password_env = {_toml_str(p.password_env)}")
+    if p.log.path:
+        out += [f"[servers.{p.name}.log]", f"type = {_toml_str(p.log.type)}", f"path = {_toml_str(p.log.path)}"]
+        if p.log.type == "ssh":
+            out.append(f"ssh_host = {_toml_str(p.log.ssh_host)}")
+    if p.process and (p.process.start or p.process.pidfile):
+        out += [f"[servers.{p.name}.process]", f"type = {_toml_str(p.process.type)}"]
+        if p.process.start:
+            out.append(f"start = {_toml_str(p.process.start)}")
+        if p.process.pidfile:
+            out.append(f"pidfile = {_toml_str(p.process.pidfile)}")
+        if p.process.type == "ssh":
+            out.append(f"ssh_host = {_toml_str(p.process.ssh_host)}")
+    existing = path.read_text(encoding="utf-8") if path.exists() else ""
+    path.write_text(existing.rstrip("\n") + "\n" + "\n".join(out) + "\n", encoding="utf-8")
+    try:
+        path.chmod(0o600)
+    except OSError:
+        pass
+    return path
+
+
 def write_example(path: Path | None = None) -> Path:
     path = path or config_path()
     path.parent.mkdir(parents=True, exist_ok=True)

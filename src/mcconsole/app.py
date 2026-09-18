@@ -18,13 +18,16 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
+from textual.selection import Selection
+from textual.strip import Strip
 from textual.suggester import Suggester
-from textual.widgets import Button, Footer, Input, Label, RichLog, Static, TabbedContent, TabPane
+from textual import events
+from textual.widgets import Button, Footer, Input, Label, RichLog, Select, Static, TabbedContent, TabPane
 
 from . import __version__
 from .completion import Completer, GameCatalog
 from .process import ProcessControl, make_process
-from .profiles import Profile, ProfileError, config_dir, config_path, load_profiles, resolve, write_example
+from .profiles import LogSpec, ProcessSpec, Profile, ProfileError, append_profile, config_dir, config_path, load_profiles, resolve, write_example
 from .rcon import Rcon, RconAuthError
 from .sources import LogSource, make_source
 from .text import log_line_text, response_text, strip_ansi
@@ -38,7 +41,9 @@ HELP = """\
           ↑/↓ historial · Ctrl-R buscar en historial · F2 filtrar log · Esc quitar filtro
           PgUp/PgDn · Ctrl-Home/Ctrl-End mover el log (si subes, deja de seguir; vuelve a seguir al llegar abajo)
           Ctrl-L limpiar · F5 reconectar RCON · F7/F8 pestaña anterior/siguiente · F1 ayuda · Ctrl-Q salir
-[b]Locales[/b]  :status  :start  :stop  :restart  :tail N  :clear  :reconnect  :help  :q
+[b]Locales[/b]  :status  :start  :stop  :restart  :tail N  :clear  :reconnect  :filter TEXTO  :tab NOMBRE  :help  :q
+          :profile new | list | close   (las pestañas de arriba son los perfiles de ~/.config/mc-console/servers.toml)
+[b]Ratón[/b]    arrastrar sobre el log selecciona y al soltar se copia al portapapeles (también Ctrl-C)
           Todo lo demás se envía al servidor por RCON (con o sin '/'). 'stop' pide confirmación.
 [b]Ojo[/b]      Salir NO para el servidor. La salida diferida de plugins no llega por RCON: se ve en el log."""
 
@@ -68,6 +73,71 @@ class Confirm(ModalScreen[bool]):
         self.dismiss(False)
 
 
+class ProfileForm(ModalScreen["Profile | None"]):
+    """Alta de perfil desde la TUI: escribe en servers.toml y abre la pestaña."""
+
+    BINDINGS = [Binding("escape", "cancel", "Cancelar")]
+
+    FIELDS = [
+        ("name", "nombre corto (sin espacios)", ""),
+        ("host", "host RCON", "127.0.0.1"),
+        ("rcon_port", "puerto RCON", "25575"),
+        ("password_file", "fichero con la contraseña RCON (0600)", "~/.config/mc-console/<nombre>.pw"),
+        ("log_path", "ruta del console.log (vacío = sin log)", ""),
+        ("log_ssh", "ssh host para el log (vacío = local)", ""),
+        ("start", "script de arranque (opcional)", ""),
+        ("pidfile", "pidfile del servidor (opcional)", ""),
+        ("proc_ssh", "ssh host para el proceso (vacío = local)", ""),
+    ]
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="profile-form"):
+            yield Label("[b]Nuevo perfil[/b]  (Tab entre campos · Enter guarda · Esc cancela)")
+            for key, label, default in self.FIELDS:
+                yield Label(label, classes="field-label")
+                yield Input(value=default if key != "password_file" else "", placeholder=default, id=f"f-{key}")
+            yield Label("", id="form-error")
+            with Horizontal():
+                yield Button("Guardar", id="save", variant="primary")
+                yield Button("Cancelar", id="cancel")
+
+    def on_mount(self) -> None:
+        self.query_one("#f-name", Input).focus()
+
+    def _val(self, key: str) -> str:
+        return self.query_one(f"#f-{key}", Input).value.strip()
+
+    @on(Input.Submitted)
+    @on(Button.Pressed, "#save")
+    def action_save(self) -> None:
+        name = self._val("name")
+        err = None
+        if not name or " " in name or "." in name:
+            err = "nombre: sin espacios ni puntos"
+        elif not self._val("rcon_port").isdigit():
+            err = "puerto: número"
+        elif not self._val("password_file"):
+            err = "hace falta el fichero de contraseña"
+        if err:
+            self.query_one("#form-error", Label).update(f"[red]{err}[/]")
+            return
+        proc = None
+        if self._val("start") or self._val("pidfile"):
+            proc = ProcessSpec(type="ssh" if self._val("proc_ssh") else "local", start=self._val("start"),
+                               pidfile=self._val("pidfile"), ssh_host=self._val("proc_ssh"))
+        prof = Profile(
+            name=name, host=self._val("host") or "127.0.0.1", rcon_port=int(self._val("rcon_port")),
+            password_file=self._val("password_file"),
+            log=LogSpec(type="ssh" if self._val("log_ssh") else "local", path=self._val("log_path"), ssh_host=self._val("log_ssh")),
+            process=proc,
+        )
+        self.dismiss(prof)
+
+    @on(Button.Pressed, "#cancel")
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
 class ServerSession:
     """Estado de un servidor dentro de la app: RCON, fuente de log, proceso, historial, cola de líneas."""
 
@@ -86,6 +156,7 @@ class ServerSession:
         self.history_idx = -1
         self.proc_pid: int | None = None
         self.unseen = 0                      # líneas nuevas mientras el usuario lee arriba
+        self.started = False                 # el seguimiento/RCON arrancan al entrar en la pestaña
         self.history_file = config_dir() / f"history-{profile.name}"
         self._load_history()
         self.catalog = GameCatalog(lambda cmd: self.ensure_rcon().command_retry(cmd))
@@ -148,6 +219,31 @@ class StickyLog(RichLog):
 
     following = True
     on_follow_change = None  # callback(bool)
+
+    # RichLog no implementa selección de texto (Log sí); la añadimos sobre sus Strips ya envueltos.
+    def get_selection(self, selection: Selection) -> tuple[str, str] | None:
+        text = "\n".join(strip.text for strip in self.lines)
+        return selection.extract(text), "\n"
+
+    def selection_updated(self, selection: Selection | None) -> None:
+        self._line_cache.clear()
+        self.refresh()
+
+    def render_line(self, y: int) -> Strip:
+        strip = super().render_line(y)
+        selection = self.text_selection
+        if selection is None:
+            return strip
+        scroll_x, scroll_y = self.scroll_offset
+        span = selection.get_span(scroll_y + y)
+        if span is None:
+            return strip
+        start, end = span
+        text = Text.assemble(*[(seg.text, seg.style or "") for seg in strip])
+        if end == -1:
+            end = len(text)
+        text.stylize(self.screen.get_component_rich_style("screen--selection"), max(0, start - scroll_x), max(0, end - scroll_x))
+        return Strip(text.render(self.app.console), strip.cell_length)
 
     def watch_scroll_y(self, old_value: float, new_value: float) -> None:
         super().watch_scroll_y(old_value, new_value)
@@ -250,10 +346,12 @@ class ConsoleApp(App[int]):
         Binding("ctrl+end", "log_end", "Al final", show=False, priority=True),
     ]
 
-    def __init__(self, profiles: list[Profile], tail: int | None = None):
+    def __init__(self, profiles: list[Profile], tail: int | None = None, active: str | None = None):
         super().__init__()
         self.sessions = [ServerSession(p) for p in profiles]
         self.tail = tail
+        self.initial_active = active
+        self._last_copied: str | None = None
 
     # --- composición
     def compose(self) -> ComposeResult:
@@ -268,14 +366,37 @@ class ConsoleApp(App[int]):
         names = lambda: [x.profile.name for x in self.sessions]  # noqa: E731
         for s in self.sessions:
             s.completer = Completer(s.catalog, names)
-        for s in self.sessions:
-            self.start_follow(s)
-            self.connect_rcon(s, verbose=True)
-            self.poll_process(s)
+        tabs = self.query_one("#tabs", TabbedContent)
+        if self.initial_active and self.query(f"#pane-{self.initial_active}"):
+            tabs.active = f"pane-{self.initial_active}"
         self.set_interval(1 / REFRESH_HZ, self.flush_pending)
         self.set_interval(5, self.poll_all)
         for pane in self.query(ServerPane):
             pane.refresh_status()
+        # la sesión arranca en on_tab_activated (la pestaña por defecto también dispara el evento)
+
+    def start_session(self, s: ServerSession) -> None:
+        """Arranque perezoso: seguir el log, conectar RCON y sondear el proceso la primera vez que se mira la pestaña."""
+        if s.started:
+            return
+        s.started = True
+        self.start_follow(s)
+        self.connect_rcon(s, verbose=True)
+        self.poll_process(s)
+
+    @on(TabbedContent.TabActivated, "#tabs")
+    def on_tab_activated(self, event: TabbedContent.TabActivated) -> None:
+        pane = event.pane
+        if not isinstance(pane, ServerPane):
+            return
+        # TabbedContent activa la primera pestaña por su cuenta antes de que apliquemos la pedida: ignorarla
+        if self.initial_active:
+            if pane.session.profile.name != self.initial_active:
+                return
+            self.initial_active = None
+        self.start_session(pane.session)
+        pane.refresh_status()
+        self.query_one("#prompt", Input).focus()
 
     # --- sesión activa
     @property
@@ -334,7 +455,8 @@ class ConsoleApp(App[int]):
 
     def poll_all(self) -> None:
         for s in self.sessions:
-            self.poll_process(s)
+            if s.started:
+                self.poll_process(s)
 
     @work(thread=True)
     def send_command(self, s: ServerSession, cmd: str) -> None:
@@ -460,6 +582,16 @@ class ConsoleApp(App[int]):
             case "filter":
                 s.filter = rest.strip()
                 self.pane.rerender(); self.pane.refresh_status()
+            case "profile":
+                sub, _, name = rest.strip().partition(" ")
+                if sub in ("new", "add"):
+                    self.push_screen(ProfileForm(), self._profile_created)
+                elif sub == "list":
+                    self.say(s, "perfiles: " + ", ".join(f"[b]{x.profile.name}[/b] ({x.profile.label})" for x in self.sessions))
+                elif sub == "close" and len(self.sessions) > 1:
+                    self.close_session(s)
+                else:
+                    self.say(s, ":profile new | list | close")
             case "tab":
                 tabs = self.query_one("#tabs", TabbedContent)
                 if rest.strip() and self.query(f"#pane-{rest.strip()}"):
@@ -470,6 +602,30 @@ class ConsoleApp(App[int]):
                 self.say(s, f"[red]comando local desconocido: :{op}[/]  (:help)")
 
     # --- acciones
+    def _profile_created(self, prof: Profile | None) -> None:
+        if prof is None:
+            return
+        try:
+            append_profile(prof)
+        except (ProfileError, OSError) as e:
+            self.notify(str(e), severity="error", timeout=5)
+            return
+        session = ServerSession(prof)
+        session.completer = Completer(session.catalog, lambda: [x.profile.name for x in self.sessions])
+        self.sessions.append(session)
+        tabs = self.query_one("#tabs", TabbedContent)
+        tabs.add_pane(ServerPane(session))
+        tabs.active = f"pane-{prof.name}"
+        self.notify(f"perfil '{prof.name}' guardado en {config_path()}", timeout=4)
+
+    def close_session(self, s: ServerSession) -> None:
+        """Cierra la pestaña (no borra el perfil del archivo)."""
+        s.stop.set()
+        if s.rcon:
+            s.rcon.close()
+        self.sessions.remove(s)
+        self.query_one("#tabs", TabbedContent).remove_pane(f"pane-{s.profile.name}")
+
     def action_clear_log(self) -> None:
         self.session.lines.clear()
         self.pane.log.clear()
@@ -496,11 +652,19 @@ class ConsoleApp(App[int]):
         else:
             self.query_one("#prompt", Input).value = ""
 
+    def _step_tab(self, delta: int) -> None:
+        tabs = self.query_one("#tabs", TabbedContent)
+        ids = [f"pane-{x.profile.name}" for x in self.sessions]
+        if len(ids) < 2:
+            return
+        i = ids.index(tabs.active) if tabs.active in ids else 0
+        tabs.active = ids[(i + delta) % len(ids)]
+
     def action_next_tab(self) -> None:
-        self.query_one("#tabs", TabbedContent).action_next_tab()
+        self._step_tab(+1)
 
     def action_prev_tab(self) -> None:
-        self.query_one("#tabs", TabbedContent).action_previous_tab()
+        self._step_tab(-1)
 
     def _history_step(self, delta: int) -> None:
         s = self.session
@@ -579,6 +743,19 @@ class ConsoleApp(App[int]):
         if event.value != getattr(self, "_last_completion_value", None) and self.session.completer:
             self.session.completer.reset_cycle()
 
+    # --- selección: al soltar el ratón, lo seleccionado se copia solo (como la selección primaria de X11 / Claude Code)
+    def on_mouse_up(self, event: events.MouseUp) -> None:
+        self.call_after_refresh(self._copy_selection_if_any)
+
+    def _copy_selection_if_any(self) -> None:
+        text = self.screen.get_selected_text()
+        if not text or text == self._last_copied:
+            return
+        self._last_copied = text
+        self.copy_to_clipboard(text)
+        n = text.count("\n") + 1
+        self.notify(f"copiado: {n} línea{'s' if n != 1 else ''}", timeout=1.5)
+
     def action_log_page(self, direction: int) -> None:
         log = self.pane.log
         (log.scroll_page_down if direction > 0 else log.scroll_page_up)(animate=False)
@@ -601,17 +778,18 @@ class ConsoleApp(App[int]):
                 s.rcon.close()
 
 
-def run_app(*profiles: Profile, tail: int | None = None) -> int:
+def run_app(*profiles: Profile, tail: int | None = None, active: str | None = None) -> int:
     if not sys.stdout.isatty():
         print("mc-console necesita una terminal; para scripts usa mc-rcon", file=sys.stderr)
         return 4
-    app = ConsoleApp(list(profiles), tail=tail)
+    app = ConsoleApp(list(profiles), tail=tail, active=active)
     return app.run() or 0
 
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="mc-console", description="Consola TUI para servidores Minecraft (log + RCON + proceso). Modo máquina: mc-rcon.")
-    ap.add_argument("profiles", nargs="*", help="perfil(es) de ~/.config/mc-console/servers.toml; varios → pestañas")
+    ap.add_argument("profiles", nargs="*", help="perfil a activar (todos los perfiles se abren como pestañas); varios → solo esos")
+    ap.add_argument("--only", action="store_true", help="abrir únicamente los perfiles indicados")
     ap.add_argument("--tail", type=int, default=None, metavar="N", help="cargar solo las últimas N líneas (por defecto: el archivo actual entero = el arranque)")
     ap.add_argument("--init", action="store_true", help="escribir un servers.toml de ejemplo y salir")
     ap.add_argument("--profiles", dest="list_profiles", action="store_true", help="listar perfiles y salir")
@@ -627,11 +805,19 @@ def main(argv: list[str] | None = None) -> int:
             print(f"{p.name:16s} {p.label}")
         return 0
     try:
-        profiles = [resolve(n) for n in args.profiles] or [resolve(None)]
+        all_profiles = list(load_profiles().values())
+        if args.profiles and (args.only or len(args.profiles) > 1):
+            profiles, active = [resolve(n) for n in args.profiles], args.profiles[0]
+        elif all_profiles:
+            profiles, active = all_profiles, (args.profiles[0] if args.profiles else None)
+            if active and active not in {p.name for p in profiles}:
+                raise ProfileError(f"perfil '{active}' no existe (disponibles: {', '.join(p.name for p in profiles)})")
+        else:
+            profiles, active = [resolve(None)], None  # variables de entorno o error claro
     except (ProfileError, ValueError) as e:
         print(f"mc-console: {e}", file=sys.stderr)
         return 4
-    return run_app(*profiles, tail=args.tail)
+    return run_app(*profiles, tail=args.tail, active=active)
 
 
 if __name__ == "__main__":

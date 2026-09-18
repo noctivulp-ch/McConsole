@@ -18,6 +18,7 @@ LOCAL_COMMANDS: dict[str, str] = {
     "help": "ayuda", "status": "estado del proceso y RCON", "start": "arrancar servidor", "stop": "parar servidor",
     "restart": "reiniciar servidor", "tail": "N — reimprimir últimas N líneas", "clear": "limpiar panel",
     "reconnect": "reconectar RCON", "filter": "TEXTO — filtrar log (vacío quita)", "tab": "NOMBRE — cambiar pestaña",
+    "profile": "new | list | close — perfiles (pestañas)",
     "q": "salir (no para el servidor)",
 }
 
@@ -144,6 +145,10 @@ class Completer:
         if len(tokens) <= 1 and not ends_space:
             names = sorted(n for n in LOCAL_COMMANDS if n.startswith(head))
             return self._finish(":", head, names, lambda n: f"{n} — {LOCAL_COMMANDS[n]}")
+        if head == "profile":
+            partial = "" if ends_space else (tokens[1] if len(tokens) > 1 else "")
+            names = [n for n in ("new", "list", "close") if n.startswith(partial)]
+            return self._finish(":profile ", partial, names)
         if head == "tab":
             partial = "" if ends_space else (tokens[1] if len(tokens) > 1 else "")
             names = sorted(n for n in self.tab_names() if n.startswith(partial))

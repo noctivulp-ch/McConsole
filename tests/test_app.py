@@ -130,3 +130,57 @@ async def test_loads_whole_file_and_follows_rotation(profile, fake_server, tmp_p
         real2 = tmp_path / "console-2.log"; real2.write_text("[00:01:00 INFO]: boot2 start\n")
         tmp_link = tmp_path / "console.log.tmp"; os.symlink(real2.name, tmp_link); os.replace(tmp_link, link)
         assert await wait_for(lambda: "arranque nuevo" in log_text(app) and "boot2 start" in log_text(app), timeout=5)
+
+
+async def test_drag_selection_autocopies(profile, fake_server, monkeypatch):
+    """Arrastrar sobre el log selecciona texto y al soltar se copia solo (OSC 52)."""
+    copied = []
+    app = ConsoleApp([profile])
+    monkeypatch.setattr(ConsoleApp, "copy_to_clipboard", lambda self, text: copied.append(text))
+    async with app.run_test(size=(80, 20)) as pilot:
+        assert await wait_for(lambda: "something odd" in log_text(app))
+        pane = app.query_one(ServerPane)
+        await pilot.mouse_down(pane.log, offset=(1, 0))
+        await pilot.hover(pane.log, offset=(30, 1))
+        await pilot.mouse_up(pane.log, offset=(30, 1))
+        assert await wait_for(lambda: bool(copied))
+        assert "Starting minecraft server" in copied[0]
+
+
+async def test_profile_form_creates_tab(profile, fake_server, tmp_path, monkeypatch):
+    import mcconsole.app as appmod
+    import mcconsole.profiles as prof
+    toml = tmp_path / "servers.toml"
+    monkeypatch.setattr(prof, "config_path", lambda: toml)
+    monkeypatch.setattr(appmod, "config_path", lambda: toml)
+    app = ConsoleApp([profile])
+    async with app.run_test(size=(100, 40)) as pilot:
+        await pilot.press(*":profile new", "enter")
+        await pilot.pause()
+        form = app.screen
+        assert isinstance(form, appmod.ProfileForm)
+        form.query_one("#f-name").value = "vps"
+        form.query_one("#f-host").value = "vps.example.net"
+        form.query_one("#f-password_file").value = str(tmp_path / "vps.pw")
+        form.query_one("#f-log_path").value = "/opt/mc/console.log"
+        form.query_one("#f-log_ssh").value = "mc@vps.example.net"
+        await pilot.click("#save")
+        await pilot.pause()
+        assert "[servers.vps]" in toml.read_text() and 'ssh_host = "mc@vps.example.net"' in toml.read_text()
+        assert [s.profile.name for s in app.sessions] == ["test", "vps"]
+        assert app.query_one("#tabs").active == "pane-vps"
+        vps = app.sessions[1]
+        assert vps.started  # la pestaña activa arranca; la remota solo cuando se mira
+
+
+async def test_lazy_start_and_initial_active(profile, fake_server, tmp_path):
+    pw = tmp_path / "pw2"; pw.write_text("secret")
+    second = Profile(name="second", host="127.0.0.1", rcon_port=1, password_file=str(pw), log=LogSpec(type="local", path=str(tmp_path / "none.log")))
+    app = ConsoleApp([profile, second], active="second")
+    async with app.run_test(size=(80, 20)) as pilot:
+        await pilot.pause()
+        assert app.query_one("#tabs").active == "pane-second"
+        assert app.sessions[1].started and not app.sessions[0].started
+        await pilot.press("f7")
+        await pilot.pause()
+        assert app.sessions[0].started

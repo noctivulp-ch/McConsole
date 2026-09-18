@@ -129,7 +129,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.tty:
         from .app import run_app
-        return run_app(prof)
+        others = [p for p in load_profiles().values() if p.name != prof.name]
+        return run_app(prof, *others, active=prof.name)
 
     if args.commands and args.commands[0].startswith(":"):
         return process_command(args.commands[0], prof, args.timeout)

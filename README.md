@@ -47,8 +47,19 @@ Para remoto, RCON debe ser alcanzable (túnel SSH `-L 25575:127.0.0.1:25575` si 
 
 ## Uso
 ```bash
-mc-console survival               # TUI de un servidor
-mc-console survival vps           # dos pestañas (Ctrl-N / Ctrl-B)
+mc-console                    # TUI con TODOS los perfiles como pestañas (F7/F8, :tab NOMBRE)
+mc-console survival               # igual, pero entra directo en la pestaña survival
+mc-console survival vps --only    # solo esas dos
+```
+Las pestañas de arriba son los perfiles. Cada sesión (seguir log, RCON, proceso) arranca la primera vez que miras su
+pestaña, así un perfil remoto no lanza `ssh` hasta que lo abres. `:profile new` abre un formulario que escribe el
+perfil en `servers.toml` y añade la pestaña; `:profile close` cierra la pestaña (no borra el perfil).
+
+**Selección y copia**: arrastra sobre el log para seleccionar (se resalta) y **al soltar se copia solo** al
+portapapeles del sistema (OSC 52; también Ctrl-C). En foot debe estar `osc52=enabled` (es el valor por defecto);
+en tmux, `set -s set-clipboard on`. Si prefieres la selección nativa de la terminal, usa Shift+arrastrar.
+
+```bash
 mc-rcon -p survival "list" "tps"  # bot: una conexión, cabecera '# cmd' por respuesta
 mc-rcon -p survival --log-wait 2 "lp user X info"
 mc-rcon -p survival --json "list"
