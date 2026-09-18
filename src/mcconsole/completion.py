@@ -113,10 +113,30 @@ class Completion:
     hint: str = ""                 # pista de argumentos, p. ej. '<targets> (only|from)'
 
 
+# Subcomandos locales y sus opciones. Los argumentos dinámicos (nombres de mundo, tipos) los aporta la app
+# vía `local_args(kind)` con kind = "worlds" | "world_types".
+LOCAL_SUBCOMMANDS: dict[str, dict[str, list[str]]] = {
+    "world": {
+        "list": ["--no-size"], "info": ["@worlds"], "types": [],
+        "create": ["--type", "--seed", "--gen-settings", "--no-structures", "--hardcore", "--difficulty", "--gamemode",
+                   "--set", "--no-activate", "--start"],
+        "use": ["@worlds", "--start"], "rename": ["@worlds"], "delete": ["@worlds", "--purge"], "backup": ["@worlds"],
+        "help": [],
+    },
+    "profile": {"new": [], "list": [], "close": []},
+}
+OPTION_VALUES: dict[str, list[str] | str] = {
+    "--type": "@world_types", "--difficulty": ["peaceful", "easy", "normal", "hard"],
+    "--gamemode": ["survival", "creative", "adventure", "spectator"],
+}
+
+
 class Completer:
-    def __init__(self, catalog: GameCatalog | None, tab_names: Callable[[], list[str]]):
+    def __init__(self, catalog: GameCatalog | None, tab_names: Callable[[], list[str]],
+                 local_args: Callable[[str], list[str]] | None = None):
         self.catalog = catalog
         self.tab_names = tab_names
+        self.local_args = local_args or (lambda kind: [])
         self._cycle_prefix = ""
         self._cycle: list[str] = []
         self._cycle_i = -1
@@ -146,15 +166,51 @@ class Completer:
         if len(tokens) <= 1 and not ends_space:
             names = sorted(n for n in LOCAL_COMMANDS if n.startswith(head))
             return self._finish(":", head, names, lambda n: f"{n} — {LOCAL_COMMANDS[n]}")
-        if head == "profile":
-            partial = "" if ends_space else (tokens[1] if len(tokens) > 1 else "")
-            names = [n for n in ("new", "list", "close") if n.startswith(partial)]
-            return self._finish(":profile ", partial, names)
+        if head in LOCAL_SUBCOMMANDS:
+            return self._complete_local_sub(head, tokens, ends_space)
         if head == "tab":
             partial = "" if ends_space else (tokens[1] if len(tokens) > 1 else "")
             names = sorted(n for n in self.tab_names() if n.startswith(partial))
             return self._finish(":tab ", partial, names)
         return Completion(text, [], LOCAL_COMMANDS.get(head, ""))
+
+    def _complete_local_sub(self, head: str, tokens: list[str], ends_space: bool) -> Completion:
+        subs = LOCAL_SUBCOMMANDS[head]
+        partial = "" if ends_space else tokens[-1]
+        done = tokens[1:] if ends_space else tokens[1:-1]          # palabras ya cerradas tras ':head'
+        prefix = ":" + head + " " + ("".join(w + " " for w in done))
+        if not done:                                                # subcomando
+            names = [n for n in subs if n.startswith(partial)]
+            return self._finish(prefix, partial, names)
+        sub = done[0]
+        spec = subs.get(sub, [])
+        # valor de una opción con valores conocidos: --type <preset>, --difficulty <x>
+        if done and done[-1] in OPTION_VALUES:
+            vals = OPTION_VALUES[done[-1]]
+            names = self.local_args(vals[1:]) if isinstance(vals, str) else vals
+            return self._finish(prefix, partial, sorted(n for n in names if n.startswith(partial)))
+        names: list[str] = []
+        if partial.startswith("-") or not any(x.startswith("@") for x in spec):
+            names += [o for o in spec if o.startswith("--") and o.startswith(partial) and (o == "--set" or o not in done)]
+        for x in spec:
+            if x.startswith("@") and not partial.startswith("-"):
+                names += [n for n in self.local_args(x[1:]) if n.startswith(partial) and n not in done]
+        hint = " ".join(o for o in spec if o.startswith("--")) if sub in ("create", "use", "delete", "list") else ""
+        return self._finish(prefix, partial, sorted(set(names)), hint=hint)
+
+    def first_candidate(self, text: str) -> str | None:
+        """Sugerencia fantasma: primer candidato sin tocar el estado del ciclo (para el Suggester del Input)."""
+        saved = (self._cycle_prefix, self._cycle, self._cycle_i, self._cycle_last)
+        try:
+            self.reset_cycle()
+            r = self.complete(text)
+        except Exception:  # noqa: BLE001
+            return None
+        finally:
+            self._cycle_prefix, self._cycle, self._cycle_i, self._cycle_last = saved
+        if r is None or r.text == text or not r.text.startswith(text):
+            return None
+        return r.text.rstrip()
 
     # --- juego
     def _complete_game(self, text: str, tokens: list[str], ends_space: bool) -> Completion | None:

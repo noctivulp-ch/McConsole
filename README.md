@@ -81,7 +81,7 @@ gamemode` + `--set clave=valor` para cualquier otra; con `terra:*` añade `world
 `save-all` por RCON antes). Crear/usar/renombrar exigen servidor parado; la TUI pide confirmación.
 Dentro de la TUI: `Tab` / `Ctrl-Espacio` **autocompleta** comandos locales (`:`), del juego y sus subcomandos
 (árbol pedido al servidor con `minecraft:help`, incluye mods y plugins; repetir = rotar candidatos) · `→` acepta la
-sugerencia del historial · `F1` ayuda · `F2` filtro · `↑↓` historial · `Ctrl-R` buscar · `Ctrl-L` limpiar ·
+sugerencia fantasma (historial y, si no, el completador: `:wo` → `:world`) · `Ctrl/Alt+⌫` borra palabra, `Alt+D` la siguiente · `F1` ayuda · `F2` filtro · `↑↓` historial · `Ctrl-R` buscar · `Ctrl-L` limpiar ·
 `F5` reconectar · `F7/F8` pestañas · `PgUp/PgDn`, `Ctrl-Home/End` mover el log (si subes a leer, las líneas nuevas
 **no** te bajan: el estado muestra `▼ N nuevas`; al volver abajo se reengancha solo) · `:status :start :stop :restart :world … :tail N :filter :tab :q`. Salir **no** para el servidor.
 

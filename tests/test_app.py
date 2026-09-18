@@ -188,3 +188,60 @@ async def test_lazy_start_and_initial_active(profile, fake_server, tmp_path):
         await pilot.press("f7")
         await pilot.pause()
         assert app.sessions[0].started
+
+
+async def test_history_keeps_local_and_slash_commands(profile, fake_server):
+    """Si falla, ↑ no recupera ':world list' ni '/list' y el usuario repite a mano los comandos locales."""
+    app = ConsoleApp([profile])
+    async with app.run_test(size=(100, 30)) as pilot:
+        assert await wait_for(lambda: "catálogo de comandos" in log_text(app))
+        prompt = app.query_one("#prompt")
+        await pilot.press(*":status", "enter")
+        await pilot.press(*"/list", "enter")
+        await pilot.pause()
+        assert app.session.history[-2:] == [":status", "/list"]
+        await pilot.press("up")
+        assert prompt.value == "/list"
+        await pilot.press("up")
+        assert prompt.value == ":status"
+
+
+def test_completer_world_subcommands_and_args():
+    from mcconsole.completion import Completer
+    args = {"worlds": ["alpha", "beta"], "world_types": ["minecraft:flat", "terra:FOO"]}
+    c = Completer(None, lambda: [], lambda kind: args.get(kind, []))
+    assert c.complete(":wo").text == ":world "
+    r = c.complete(":world ")
+    assert "create" in r.candidates and "delete" in r.candidates
+    assert c.complete(":world del").text == ":world delete "
+    assert c.complete(":world delete a").text == ":world delete alpha "
+    r = c.complete(":world delete alpha --")
+    assert r.text == ":world delete alpha --purge "
+    assert c.complete(":world create x --type ter").text == ":world create x --type terra:FOO "
+    assert c.complete(":world create x --difficulty h").text == ":world create x --difficulty hard "
+    # sugerencia fantasma: primer candidato, sin arrancar el ciclo
+    assert c.first_candidate(":wor") == ":world"
+    assert c.first_candidate(":world us") == ":world use"
+    assert c._cycle == []
+
+
+async def test_ghost_suggestion_from_completer(profile, fake_server):
+    app = ConsoleApp([profile])
+    async with app.run_test(size=(100, 30)) as pilot:
+        assert await wait_for(lambda: "catálogo de comandos" in log_text(app))
+        prompt = app.query_one("#prompt")
+        await pilot.press(*":wor")
+        assert await wait_for(lambda: prompt._suggestion == ":world")
+        await pilot.press("right")
+        assert prompt.value == ":world"
+
+
+async def test_word_deletion_bindings(profile, fake_server):
+    app = ConsoleApp([profile])
+    async with app.run_test(size=(100, 30)) as pilot:
+        prompt = app.query_one("#prompt")
+        await pilot.press(*"say hola mundo")
+        await pilot.press("ctrl+backspace")
+        assert prompt.value == "say hola "
+        await pilot.press("alt+backspace")
+        assert prompt.value == "say "

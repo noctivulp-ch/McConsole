@@ -12,6 +12,7 @@ import threading
 from collections import deque
 from pathlib import Path
 
+from rich.style import Style
 from rich.text import Text
 from textual import on, work
 from textual.app import App, ComposeResult
@@ -193,6 +194,17 @@ class ServerSession:
             self.pending.append(line)
 
 
+class Prompt(Input):
+    """Input con edición por palabras como en una shell: Ctrl/Alt+Backspace borra la palabra anterior (Textual
+    lo trae mapeado a borrar hacia la derecha), Alt+D / Ctrl+Supr la siguiente, Ctrl+←/→ salta palabras."""
+
+    BINDINGS = [
+        Binding("ctrl+backspace,alt+backspace,ctrl+w", "delete_left_word", "Borrar palabra anterior", show=False, priority=True),
+        Binding("alt+d,ctrl+delete", "delete_right_word", "Borrar palabra siguiente", show=False, priority=True),
+        Binding("alt+left", "cursor_left_word", show=False), Binding("alt+right", "cursor_right_word", show=False),
+    ]
+
+
 class HistorySuggester(Suggester):
     """Sugerencia fantasma (se acepta con →) a partir del historial de la sesión activa."""
 
@@ -203,9 +215,14 @@ class HistorySuggester(Suggester):
     async def get_suggestion(self, value: str) -> str | None:
         if len(value) < 2:
             return None
-        for cmd in reversed(self.app_ref.session.history):
+        s = self.app_ref.session
+        for cmd in reversed(s.history):
             if cmd.startswith(value) and cmd != value:
                 return cmd
+        # sin historial: primer candidato del completador (locales siempre; juego solo si el catálogo está en memoria
+        # para no lanzar RCON desde el hilo de la UI)
+        if s.completer and (value.startswith(":") or (s.catalog and s.catalog.ready and " " not in value.strip())):
+            return s.completer.first_candidate(value)
         return None
 
 
@@ -239,7 +256,9 @@ class StickyLog(RichLog):
             text = Text.assemble(*[(seg.text, seg.style or "") for seg in strip])
             if end == -1:
                 end = len(text)
-            text.stylize(self.screen.get_component_rich_style("screen--selection"), max(0, start - scroll_x), max(0, end - scroll_x))
+            sel = self.screen.get_component_rich_style("screen--selection")
+            # solo el fondo: el texto conserva sus colores (la selección "opaca" de Textual pisa el color de frente)
+            text.stylize(Style(bgcolor=sel.bgcolor), max(0, start - scroll_x), max(0, end - scroll_x))
             strip = Strip(text.render(self.app.console), strip.cell_length)
         # Sin estos metadatos el compositor no puede mapear el ratón a coordenadas de contenido y la selección
         # degenera en "todo el widget" (SELECT_ALL): es lo que hace Log y lo que RichLog omite.
@@ -358,14 +377,14 @@ class ConsoleApp(App[int]):
         with TabbedContent(id="tabs"):
             for s in self.sessions:
                 yield ServerPane(s)
-        yield Input(placeholder="comando RCON…  (:help para ayuda local, Tab completa)", id="prompt", suggester=HistorySuggester(self))
+        yield Prompt(placeholder="comando RCON…  (:help para ayuda local, Tab completa, → acepta la sugerencia)", id="prompt", suggester=HistorySuggester(self))
         yield Footer()
 
     def on_mount(self) -> None:
         self.query_one("#prompt", Input).focus()
         names = lambda: [x.profile.name for x in self.sessions]  # noqa: E731
         for s in self.sessions:
-            s.completer = Completer(s.catalog, names)
+            s.completer = Completer(s.catalog, names, lambda kind, ss=s: self.local_args(ss, kind))
         tabs = self.query_one("#tabs", TabbedContent)
         if self.initial_active and self.query(f"#pane-{self.initial_active}"):
             tabs.active = f"pane-{self.initial_active}"
@@ -536,11 +555,11 @@ class ConsoleApp(App[int]):
         s.history_idx = -1
         if not text:
             return
+        s.remember(text)
         if text.startswith(":"):
             self.local_command(text[1:])
             return
         cmd = text[1:] if text.startswith("/") else text
-        s.remember(text)
         if cmd.split()[0].lower() == "stop":
             self.push_screen(Confirm(f"¿Parar el servidor {s.profile.name}?"), lambda ok: ok and self.process_or_rcon_stop(s))
             return
@@ -603,6 +622,26 @@ class ConsoleApp(App[int]):
             case _:
                 self.say(s, f"[red]comando local desconocido: :{op}[/]  (:help)")
 
+    def local_args(self, s: ServerSession, kind: str) -> list[str]:
+        """Argumentos dinámicos para el autocompletado local (nombres de mundo, tipos de mundo)."""
+        from . import worlds
+        from .worldcmd import server_dir
+        sd = server_dir(s.profile)
+        if sd is None or not sd.exists():
+            return []
+        try:
+            if kind == "worlds":
+                return sorted(p.name for p in sd.iterdir() if p.is_dir() and (p / "level.dat").exists())
+            if kind == "world_types":
+                cache = getattr(s, "_world_types", None)
+                if cache is None:
+                    cache = [t.id for t in worlds.discover_world_types(sd)]
+                    s._world_types = cache  # type: ignore[attr-defined]
+                return cache
+        except OSError:
+            return []
+        return []
+
     def world_command(self, s: ServerSession, text: str) -> None:
         from .worldcmd import needs_confirm, run as world_run
         msg = needs_confirm(text)
@@ -636,7 +675,8 @@ class ConsoleApp(App[int]):
             self.notify(str(e), severity="error", timeout=5)
             return
         session = ServerSession(prof)
-        session.completer = Completer(session.catalog, lambda: [x.profile.name for x in self.sessions])
+        session.completer = Completer(session.catalog, lambda: [x.profile.name for x in self.sessions],
+                                      lambda kind, ss=session: self.local_args(ss, kind))
         self.sessions.append(session)
         tabs = self.query_one("#tabs", TabbedContent)
         tabs.add_pane(ServerPane(session))
