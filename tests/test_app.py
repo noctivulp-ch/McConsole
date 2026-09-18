@@ -144,7 +144,11 @@ async def test_drag_selection_autocopies(profile, fake_server, monkeypatch):
         await pilot.hover(pane.log, offset=(30, 1))
         await pilot.mouse_up(pane.log, offset=(30, 1))
         assert await wait_for(lambda: bool(copied))
-        assert "Starting minecraft server" in copied[0]
+        # selección parcial de las filas 0-1 (el log tiene padding 0 1: widget x=1 → contenido col 0; x=30 → col 29):
+        # exactamente eso, no todo el log (regresión: sin Strip.apply_offsets el compositor caía en SELECT_ALL)
+        row0, row1 = pane.log.lines[0].text, pane.log.lines[1].text
+        assert copied[0] == row0.rstrip() + "\n" + row1[:30].rstrip()  # fin inclusivo
+        assert "something odd" not in copied[0] and "Starting minecraft" not in copied[0]
 
 
 async def test_profile_form_creates_tab(profile, fake_server, tmp_path, monkeypatch):

@@ -231,19 +231,19 @@ class StickyLog(RichLog):
 
     def render_line(self, y: int) -> Strip:
         strip = super().render_line(y)
-        selection = self.text_selection
-        if selection is None:
-            return strip
         scroll_x, scroll_y = self.scroll_offset
-        span = selection.get_span(scroll_y + y)
-        if span is None:
-            return strip
-        start, end = span
-        text = Text.assemble(*[(seg.text, seg.style or "") for seg in strip])
-        if end == -1:
-            end = len(text)
-        text.stylize(self.screen.get_component_rich_style("screen--selection"), max(0, start - scroll_x), max(0, end - scroll_x))
-        return Strip(text.render(self.app.console), strip.cell_length)
+        content_y = scroll_y + y
+        selection = self.text_selection
+        if selection is not None and (span := selection.get_span(content_y)) is not None:
+            start, end = span
+            text = Text.assemble(*[(seg.text, seg.style or "") for seg in strip])
+            if end == -1:
+                end = len(text)
+            text.stylize(self.screen.get_component_rich_style("screen--selection"), max(0, start - scroll_x), max(0, end - scroll_x))
+            strip = Strip(text.render(self.app.console), strip.cell_length)
+        # Sin estos metadatos el compositor no puede mapear el ratón a coordenadas de contenido y la selección
+        # degenera en "todo el widget" (SELECT_ALL): es lo que hace Log y lo que RichLog omite.
+        return strip.apply_offsets(scroll_x, content_y)
 
     def watch_scroll_y(self, old_value: float, new_value: float) -> None:
         super().watch_scroll_y(old_value, new_value)

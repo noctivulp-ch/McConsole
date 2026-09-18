@@ -1,6 +1,6 @@
 [project]
 name = "mc-console"
-version = "0.4.0"
+version = "0.4.1"
 description = "Consola local/remota para servidores Minecraft: log en vivo + RCON + control del proceso (TUI para humanos, CLI para scripts y agentes)"
 readme = "README.md"
 requires-python = ">=3.11"
