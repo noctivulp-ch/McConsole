@@ -16,6 +16,10 @@ mc-console --init                                  # escribe ~/.config/mc-consol
 ```
 
 ## Perfiles (`~/.config/mc-console/servers.toml`)
+
+Tipos de log: `local` (fichero), `ssh` (`tail -F` remoto) y **`sftp`** (sondeo de `logs/latest.log` por SFTP, para
+paneles tipo Pterodactyl que dan SFTP pero no shell; instalar con el extra `.[sftp]` = paramiko; claves
+`sftp_host/sftp_port/sftp_user/sftp_password_file|sftp_key`).
 ```toml
 [servers.survival]
 host = "127.0.0.1"

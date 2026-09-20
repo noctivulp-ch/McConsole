@@ -19,6 +19,7 @@ import json
 import os
 import sys
 import time
+from pathlib import Path
 
 from . import __version__
 from .process import make_process
@@ -31,7 +32,7 @@ from .text import mc_to_ansi, strip_ansi, strip_mc
 def _new_log_lines(source, since: int) -> tuple[list[str], int]:
     """Solo para fuentes locales: líneas nuevas desde un tamaño de fichero."""
     p = getattr(source, "path", None)
-    if p is None:
+    if not isinstance(p, Path):  # solo ficheros locales (las fuentes ssh/sftp tienen path remoto en str)
         return [], since
     try:
         size = p.stat().st_size
@@ -90,7 +91,7 @@ def process_command(op: str, prof: Profile, timeout: float) -> int:
                 if "SERVER_EXIT=" in l or "Mod loading has failed" in l:
                     print("el servidor murió al arrancar:", strip_ansi(l).strip(), file=sys.stderr)
                     return 3
-            if source is None or not hasattr(source, "path"):
+            if source is None or not isinstance(getattr(source, "path", None), Path):
                 # sin log local: comprobar solo el pid unos segundos
                 if time.monotonic() > deadline - 290:
                     print("arranque lanzado" if proc.pid() else "no se ve el proceso", file=sys.stderr)
@@ -162,7 +163,7 @@ def main(argv: list[str] | None = None) -> int:
     commands = [c[1:] if c.startswith("/") else c for c in commands]
 
     source = make_source(prof.log) if args.log_wait else None
-    if args.log_wait and (source is None or not hasattr(source, "path")):
+    if args.log_wait and (source is None or not isinstance(getattr(source, "path", None), Path)):
         print("mc-rcon: --log-wait requiere un log local en el perfil", file=sys.stderr)
         return 4
 

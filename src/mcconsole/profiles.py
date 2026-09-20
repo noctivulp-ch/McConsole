@@ -36,9 +36,14 @@ def config_path() -> Path:
 
 @dataclass
 class LogSpec:
-    type: str = "local"           # local | ssh
+    type: str = "local"           # local | ssh | sftp
     path: str = ""
     ssh_host: str = ""
+    sftp_host: str = ""           # solo type=sftp (paneles Pterodactyl: SFTP sin shell)
+    sftp_port: int = 2022
+    sftp_user: str = ""
+    sftp_password_file: str = ""  # o sftp_key (ruta a clave privada)
+    sftp_key: str = ""
 
 
 @dataclass
@@ -103,7 +108,9 @@ def load_profiles(path: Path | None = None) -> dict[str, Profile]:
             rcon_port=int(d.get("rcon_port", 25575)),
             password_file=_expand(d.get("password_file", "")),
             password_env=d.get("password_env", ""),
-            log=LogSpec(type=log.get("type", "local"), path=_expand(log.get("path", "")), ssh_host=log.get("ssh_host", "")),
+            log=LogSpec(type=log.get("type", "local"), path=_expand(log.get("path", "")), ssh_host=log.get("ssh_host", ""),
+                        sftp_host=log.get("sftp_host", ""), sftp_port=int(log.get("sftp_port", 2022)), sftp_user=log.get("sftp_user", ""),
+                        sftp_password_file=_expand(log.get("sftp_password_file", "")), sftp_key=_expand(log.get("sftp_key", ""))),
             process=None if not proc else ProcessSpec(
                 type=proc.get("type", "local"), start=_expand(proc.get("start", "")),
                 pidfile=_expand(proc.get("pidfile", "")), ssh_host=proc.get("ssh_host", ""),
