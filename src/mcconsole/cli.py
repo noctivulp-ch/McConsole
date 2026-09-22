@@ -4,7 +4,7 @@
   echo "cmd" | mc-rcon [-p PERFIL] -          comandos por stdin (uno por línea, # comenta)
   mc-rcon [-p PERFIL] --log-wait 2 "cmd"      + líneas NUEVAS del log durante 2 s (salida diferida de plugins)
   mc-rcon [-p PERFIL] --json "cmd"            {"cmd","response","log"} por línea
-  mc-rcon [-p PERFIL] :status|:start|:stop|:restart
+  mc-rcon [-p PERFIL] :status|:start|:stop|:restart|:ip
   mc-rcon [-p PERFIL] :world list|info|types|create|use|rename|delete|backup …   mundos (":world help")
   mc-rcon [-p PERFIL] -t                      abre la TUI (mc-console)
   mc-rcon --profiles                          lista perfiles
@@ -48,6 +48,11 @@ def _new_log_lines(source, since: int) -> tuple[list[str], int]:
 
 
 def process_command(op: str, prof: Profile, timeout: float) -> int:
+    if op == ":ip":
+        from .worldcmd import address_info
+        for line in address_info(prof):
+            print(line)
+        return 0
     proc = make_process(prof.process)
     if proc is None:
         print("el perfil no define [process] (pidfile/start)", file=sys.stderr)
@@ -103,7 +108,7 @@ def process_command(op: str, prof: Profile, timeout: float) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="mc-rcon", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("commands", nargs="*", help='comandos; "-" = stdin; ":status/:start/:stop/:restart" = proceso')
+    ap.add_argument("commands", nargs="*", help='comandos; "-" = stdin; ":status/:start/:stop/:restart" = proceso, ":ip" = dirección de conexión')
     ap.add_argument("-p", "--profile", help="perfil de ~/.config/mc-console/servers.toml")
     ap.add_argument("-t", "--tty", action="store_true", help="abrir la TUI (mc-console)")
     ap.add_argument("--profiles", action="store_true", help="listar perfiles y salir")

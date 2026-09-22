@@ -42,7 +42,7 @@ HELP = """\
           ↑/↓ historial · Ctrl-R buscar en historial · F2 filtrar log · Esc quitar filtro
           PgUp/PgDn · Ctrl-Home/Ctrl-End mover el log (si subes, deja de seguir; vuelve a seguir al llegar abajo)
           Ctrl-L limpiar · F5 reconectar RCON · F7/F8 pestaña anterior/siguiente · F1 ayuda · Ctrl-Q salir
-[b]Locales[/b]  :status  :start  :stop  :restart  :tail N  :clear  :reconnect  :filter TEXTO  :tab NOMBRE  :help  :q
+[b]Locales[/b]  :status  :start  :stop  :restart  :ip  :tail N  :clear  :reconnect  :filter TEXTO  :tab NOMBRE  :help  :q
           :profile new | list | close   (las pestañas de arriba son los perfiles de ~/.config/mc-console/servers.toml)
 [b]Ratón[/b]    arrastrar sobre el log selecciona y al soltar se copia al portapapeles (también Ctrl-C)
           Todo lo demás se envía al servidor por RCON (con o sin '/'). 'stop' pide confirmación.
@@ -587,6 +587,10 @@ class ConsoleApp(App[int]):
                 self.poll_process(s)
                 pid = s.process.pid() if s.process else None
                 self.say(s, f"servidor: {'corriendo, pid ' + str(pid) if pid else ('parado' if s.process else 'sin control de proceso')} · RCON: {'conectado' if s.rcon and s.rcon.connected else 'desconectado'}")
+            case "ip":
+                from .worldcmd import address_info
+                for line in address_info(s.profile):
+                    self.say(s, line)
             case "start":
                 self.process_action(s, "start")
             case "stop":

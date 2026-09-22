@@ -16,6 +16,9 @@ Formato:
     pidfile = "/ruta/server.pid"
     # server_dir = "/ruta"       # carpeta con server.properties y los mundos (:world); por defecto la del start
     # ssh_host = "user@vps"
+
+Para servidores remotos, `address` y `game_port` (fuera de [process]) dan la dirección que `:ip` muestra para
+conectarse desde Minecraft cuando no hay un server.properties local que leer.
 """
 from __future__ import annotations
 
@@ -68,6 +71,8 @@ class Profile:
     name: str
     host: str = "127.0.0.1"
     rcon_port: int = 25575
+    game_port: int = 0            # puerto del juego si no se puede leer de server.properties (host remoto)
+    address: str = ""             # dominio/IP que se escribe en Minecraft (si no, host)
     password_file: str = ""
     password_env: str = ""
     log: LogSpec = field(default_factory=LogSpec)
@@ -106,6 +111,8 @@ def load_profiles(path: Path | None = None) -> dict[str, Profile]:
             name=name,
             host=d.get("host", "127.0.0.1"),
             rcon_port=int(d.get("rcon_port", 25575)),
+            game_port=int(d.get("game_port", 0)),
+            address=_expand(d.get("address", "")),
             password_file=_expand(d.get("password_file", "")),
             password_env=d.get("password_env", ""),
             log=LogSpec(type=log.get("type", "local"), path=_expand(log.get("path", "")), ssh_host=log.get("ssh_host", ""),

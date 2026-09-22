@@ -19,6 +19,50 @@ def server_dir(prof: Profile) -> Path | None:
     return prof.process.server_path()
 
 
+def address_info(prof: Profile) -> list[str]:
+    """Dirección de conexión del servidor, tal y como se escribe en Minecraft (Multijugador → Añadir servidor).
+
+    Un servidor local se conecta con `localhost:<puerto>` (Minecraft acepta ese formato; con el puerto por defecto,
+    25565, basta `localhost`). Los datos salen de `server.properties` cuando el perfil sabe dónde está el servidor.
+    """
+    import socket
+
+    out: list[str] = []
+    sd = server_dir(prof)
+    props = worlds.Properties(sd / "server.properties") if sd else None
+    port = (props.get("server-port") if props else "") or (str(prof.game_port) if prof.game_port else "") or "25565"
+    bind = (props.get("server-ip") if props else "") or ""
+    remoto = prof.host not in ("127.0.0.1", "localhost", "::1", "")
+    sufijo = "" if port == "25565" else f":{port}"
+
+    if remoto:
+        out.append(f"remoto:     {prof.address or prof.host}{sufijo}")
+        if prof.address and prof.address != prof.host:
+            out.append(f"            (IP {prof.host}{sufijo})")
+        out.append(f"RCON:       {prof.host}:{prof.rcon_port}")
+    else:
+        out.append(f"este PC:    localhost{sufijo}    (igual que 127.0.0.1{sufijo})")
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sock.connect(("10.255.255.255", 1))
+            out.append(f"en la LAN:  {sock.getsockname()[0]}{sufijo}")
+            sock.close()
+        except Exception:
+            pass
+        out.append(f"RCON:       127.0.0.1:{prof.rcon_port}")
+    if props:
+        extras = [f"{k}={props.get(k)}" for k in ("online-mode", "level-name", "max-players", "difficulty") if props.get(k)]
+        if bind:
+            extras.append(f"server-ip={bind}")
+        if extras:
+            out.append("  " + " · ".join(extras))
+        if props.get("motd"):
+            out.append(f"  motd: {props.get('motd')}")
+    elif not remoto:
+        out.append("  (sin server.properties: define process.server_dir o process.start en el perfil)")
+    return out
+
+
 def parse(text: str) -> tuple[str, list[str], dict[str, str | bool | list[str]]]:
     """':world create foo --type flat --seed 3 --set x=y' → ('create', ['foo'], {'type': 'flat', 'seed': '3', 'set': ['x=y']})."""
     toks = shlex.split(text)

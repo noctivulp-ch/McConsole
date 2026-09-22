@@ -67,7 +67,7 @@ en tmux, `set -s set-clipboard on`. Si prefieres la selección nativa de la term
 mc-rcon -p survival "list" "tps"  # bot: una conexión, cabecera '# cmd' por respuesta
 mc-rcon -p survival --log-wait 2 "lp user X info"
 mc-rcon -p survival --json "list"
-mc-rcon -p survival :status | :start | :stop | :restart
+mc-rcon -p survival :status | :start | :stop | :restart  ·  `:ip` (dirección para conectarse desde Minecraft)
 mc-rcon -p survival :world list | info W | types | create W --type minecraft:flat --seed 3 | use W | rename A B | delete W | backup W
 echo -e "say a\nsay b" | mc-rcon -p survival -
 ```
