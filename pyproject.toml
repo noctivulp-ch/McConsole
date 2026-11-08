@@ -3,8 +3,10 @@ name = "mc-console"
 version = "0.5.2"
 description = "Consola local/remota para servidores Minecraft: log en vivo + RCON + control del proceso (TUI para humanos, CLI para scripts y agentes)"
 readme = "README.md"
+authors = [{ name = "NoctiVulp" }]
 requires-python = ">=3.11"
-license = { text = "MIT" }
+license = "GPL-3.0-or-later"
+license-files = ["LICENSE", "NOTICE"]
 dependencies = [
     "textual>=8.2,<9",
     "rich>=13",

@@ -1,0 +1,20 @@
+McConsole
+Copyright (C) 2026 NoctiVulp
+
+This program is free software: you can redistribute it and/or modify it under the terms of the
+GNU General Public License as published by the Free Software Foundation,
+either version 3 of the License, or (at your option) any later version.
+SPDX-License-Identifier: GPL-3.0-or-later
+
+This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY;
+without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+
+El nombre «NoctiVulp», el de este programa y sus logotipos no se licencian: ver TRADEMARKS.md.
+
+Componentes de terceros
+-----------------------
+
+- Textual, Rich — MIT
+- paramiko (extra opcional [sftp]) — LGPL-2.1-or-later; se instala aparte, no se incluye. Sus dependencias: cryptography (Apache-2.0 / BSD-3-Clause), bcrypt (Apache-2.0), PyNaCl (Apache-2.0), invoke (BSD-2-Clause)
+- Herramientas de desarrollo y de tools/: pytest (MIT), pytest-asyncio (Apache-2.0), Pillow (MIT-CMU), NumPy (BSD-3-Clause); Chromium como programa externo — no se distribuyen
+- Minecraft y los servidores que se administran no se incluyen: los aporta el usuario
